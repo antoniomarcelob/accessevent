@@ -1,5 +1,5 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { AsyncContent } from '@/components/async-content';
@@ -12,6 +12,8 @@ import type { Area, Path, PointOfInterest } from '@/data/types';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { useMapGestureNavigation } from '@/hooks/useMapGestureNavigation';
 import { useRefreshOnFocus } from '@/hooks/useRefreshOnFocus';
+import { useUserLocation } from '@/hooks/useUserLocation';
+import { resolveEventMapCenter } from '@/services/eventMapLocation';
 import { colors } from '@/theme/tokens';
 import { markersFromPois, polygonsFromAreas, polylinesFromPaths, rectsFromPois } from '@/utils/mapContent';
 
@@ -35,7 +37,21 @@ export default function UserMapScreen() {
   const id = mapId ?? '';
   const mapGestures = useMapGestureNavigation();
 
+  const { userLocation, isLoading, error, providerState, requestPermission } = useUserLocation();
+  const permissionRequested = useRef(false);
+
+  useEffect(() => {
+    if (permissionRequested.current) return;
+    permissionRequested.current = true;
+    void requestPermission();
+  }, [requestPermission]);
+
   const map = useAsyncData(() => repository.getNavigationMap(id), id);
+  const eventId = map.state.status === 'success' ? map.state.data?.eventId : undefined;
+  const eventCenter = useAsyncData(
+    () => (eventId ? resolveEventMapCenter(eventId) : Promise.resolve(null)),
+    eventId ?? '',
+  );
   const savedPaths = useAsyncData(() => repository.listPaths(id), id);
   const savedPois = useAsyncData(() => repository.listPois(id), id);
   const savedAreas = useAsyncData(() => repository.listAreas(id), id);
@@ -45,6 +61,7 @@ export default function UserMapScreen() {
     savedPaths.reload(showIndicator);
     savedPois.reload(showIndicator);
     savedAreas.reload(showIndicator);
+    if (eventId) eventCenter.reload(showIndicator);
   };
 
   useRefreshOnFocus(reload);
@@ -59,7 +76,8 @@ export default function UserMapScreen() {
   const isMapContentLoading =
     savedPaths.state.status === 'loading' ||
     savedPois.state.status === 'loading' ||
-    savedAreas.state.status === 'loading';
+    savedAreas.state.status === 'loading' ||
+    (eventId !== undefined && eventCenter.state.status === 'loading');
   const mapContentFailed =
     (savedPaths.state.status === 'error' || savedPois.state.status === 'error') &&
     paths.length === 0 &&
@@ -92,7 +110,13 @@ export default function UserMapScreen() {
       <Screen
         scrollable
         onRefresh={() => reload()}
-        refreshing={map.refreshing || savedPaths.refreshing || savedPois.refreshing || savedAreas.refreshing}
+        refreshing={
+          map.refreshing ||
+          savedPaths.refreshing ||
+          savedPois.refreshing ||
+          savedAreas.refreshing ||
+          eventCenter.refreshing
+        }
         testID="user-map-screen"
       >
         <AsyncContent state={map.state} onRetry={reload} loadingLabel="Carregando o mapa…">
@@ -127,17 +151,34 @@ export default function UserMapScreen() {
                           />
                         </EmptyState>
                       </View>
-                    ) : (
+                    ) : eventCenter.state.status === 'error' ? (
+                      <View className="h-full items-center justify-center rounded-lg border border-border bg-surface p-4">
+                        <EmptyState
+                          compact
+                          icon="map-marker-off-outline"
+                          title="Não foi possível localizar o endereço do evento"
+                          description={eventCenter.state.message}
+                        >
+                          <Button
+                            label="Tentar novamente"
+                            variant="outline"
+                            onPress={() => eventCenter.reload()}
+                          />
+                        </EmptyState>
+                      </View>
+                    ) : eventCenter.state.status === 'success' && eventCenter.state.data ? (
                       <EventMap
                         className="h-full rounded-lg border border-border"
                         markers={markers}
                         polylines={polylines}
                         rects={rects}
                         areas={polygonsFromAreas(areas)}
+                        initialFocus={eventCenter.state.data}
                         accessibilityLabel={mapAccessibilityLabel}
                         fitPadding={12}
+                        userLocation={userLocation ?? null}
                       />
-                    )}
+                    ) : null}
                   </View>
                   <Text variant="caption">
                     Os caminhos registrados pelo organizador e os pontos de interesse aparecem
@@ -145,30 +186,61 @@ export default function UserMapScreen() {
                   </Text>
                 </View>
 
-                <Alert
-                  tone="info"
-                  title="Dados informados pelo organizador"
-                  description="As características de acessibilidade não são verificadas automaticamente. Confira a data da última atualização antes de seguir por um caminho."
-                />
-
-                <Card variant="soft">
-                  <View className="gap-2">
-                    <View className="flex-row items-center gap-2">
-                      <Icon name="human-wheelchair" size={20} color={colors.primary} />
-                      <Text variant="label">Rotas dentro do mapa</Text>
+                  {isLoading ? (
+                    <View className="items-center py-2">
+                      <ActivityIndicator color={colors.primary} />
+                      <Text variant="caption" tint="muted" className="mt-1">
+                        Lendo a localização…
+                      </Text>
                     </View>
-                    <Text variant="caption">
-                      Em breve você vai escolher um destino e informar suas restrições, como evitar
-                      escadas. O aplicativo calcula o caminho dentro do mapa.
-                    </Text>
-                  </View>
-                </Card>
+                  ) : !providerState.servicesEnabled ? (
+                    <Alert tone="warning" title="Serviços de localização desabilitados" description="Ative os serviços de localização no aparelho para o mapa exibir sua posição." />
+                  ) : providerState.permission !== 'granted' ? (
+                    <Alert
+                      tone={error ? 'error' : 'info'}
+                      title="Localização desativada"
+                      description={error ?? 'Ative a localização no app para o mapa mostrar onde você está.'}
+                      action={
+                        <Button
+                          label="Permitir localização"
+                          variant="outline"
+                          onPress={() => requestPermission()}
+                        />
+                      }
+                    />
+                  ) : error ? (
+                    <Alert tone="error" title="Não foi possível ler a localização" description={error} />
+                  ) : userLocation ? (
+                    <View className="flex-row items-center gap-2 rounded-xl bg-primary/10 px-3 py-2">
+                      <Icon name="crosshairs-gps" size={20} color={colors.primary} />
+                      <Text variant="caption">Você está aqui</Text>
+                    </View>
+                  ) : null}
 
-                <Button
-                  label="Voltar às navegações"
-                  variant="ghost"
-                  onPress={() => router.back()}
-                />
+                  <Alert
+                    tone="info"
+                    title="Dados informados pelo organizador"
+                    description="As características de acessibilidade não são verificadas automaticamente. Confira a data da última atualização antes de seguir por um caminho."
+                  />
+
+                  <Card variant="soft">
+                    <View className="gap-2">
+                      <View className="flex-row items-center gap-2">
+                        <Icon name="human-wheelchair" size={20} color={colors.primary} />
+                        <Text variant="label">Rotas dentro do mapa</Text>
+                      </View>
+                      <Text variant="caption">
+                        Em breve você vai escolher um destino e informar suas restrições, como evitar
+                        escadas. O aplicativo calcula o caminho dentro do mapa.
+                      </Text>
+                    </View>
+                  </Card>
+
+                  <Button
+                    label="Voltar às navegações"
+                    variant="ghost"
+                    onPress={() => router.back()}
+                  />
               </>
             ) : (
               <EmptyState
