@@ -15,8 +15,9 @@ import type { Area, Path, PointOfInterest } from '@/data/types';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { useMapGestureNavigation } from '@/hooks/useMapGestureNavigation';
 import { useRefreshOnFocus } from '@/hooks/useRefreshOnFocus';
+import { resolveEventMapCenter } from '@/services/eventMapLocation';
 import { colors } from '@/theme/tokens';
-import { markersFromPois, polygonsFromAreas, polylinesFromPaths, rectsFromPois } from '@/utils/mapContent';
+import { markersFromPois, polygonsFromAreas, polylinesFromPaths } from '@/utils/mapContent';
 
 /**
  * Listas vazias com identidade estável.
@@ -63,6 +64,10 @@ export default function ManageNavigationMapScreen() {
   const mapGestures = useMapGestureNavigation();
 
   const map = useAsyncData(() => repository.getNavigationMap(id), id);
+  const eventCenter = useAsyncData(
+    () => resolveEventMapCenter(eventId ?? ''),
+    eventId ?? '',
+  );
   const savedPaths = useAsyncData(() => repository.listPaths(id), id);
   const savedPois = useAsyncData(() => repository.listPois(id), id);
   const savedAreas = useAsyncData(() => repository.listAreas(id), id);
@@ -72,6 +77,7 @@ export default function ManageNavigationMapScreen() {
     savedPaths.reload(showIndicator);
     savedPois.reload(showIndicator);
     savedAreas.reload(showIndicator);
+    eventCenter.reload(showIndicator);
   });
 
   const navigationName = map.state.status === 'success' ? map.state.data?.name : null;
@@ -84,7 +90,8 @@ export default function ManageNavigationMapScreen() {
   const isMapContentLoading =
     savedPaths.state.status === 'loading' ||
     savedPois.state.status === 'loading' ||
-    savedAreas.state.status === 'loading';
+    savedAreas.state.status === 'loading' ||
+    eventCenter.state.status === 'loading';
 
   const openPathEditor = useCallback(
     (pathId: string) => {
@@ -129,7 +136,6 @@ export default function ManageNavigationMapScreen() {
       })),
     [pois, openPoiEditor],
   );
-  const rects = useMemo(() => rectsFromPois(pois), [pois]);
 
   const mapAccessibilityLabel = [
     'Mapa da navegação',
@@ -164,8 +170,15 @@ export default function ManageNavigationMapScreen() {
           savedPaths.reload();
           savedPois.reload();
           savedAreas.reload();
+          eventCenter.reload();
         }}
-        refreshing={map.refreshing || savedPaths.refreshing || savedPois.refreshing || savedAreas.refreshing}
+        refreshing={
+          map.refreshing ||
+          savedPaths.refreshing ||
+          savedPois.refreshing ||
+          savedAreas.refreshing ||
+          eventCenter.refreshing
+        }
         testID="manage-navigation-map-screen"
       >
         <AsyncContent state={map.state} onRetry={map.reload} loadingLabel="Carregando a navegação…">
@@ -185,17 +198,30 @@ export default function ManageNavigationMapScreen() {
                           Carregando o mapa…
                         </Text>
                       </View>
-                    ) : (
+                    ) : eventCenter.state.status === 'error' ? (
+                      <EmptyState
+                        compact
+                        icon="map-marker-off-outline"
+                        title="Não foi possível localizar o endereço do evento"
+                        description={eventCenter.state.message}
+                      >
+                        <Button
+                          label="Tentar novamente"
+                          variant="outline"
+                          onPress={() => eventCenter.reload()}
+                        />
+                      </EmptyState>
+                    ) : eventCenter.state.status === 'success' ? (
                       <EventMap
                         className="h-full rounded-lg border border-border"
                         markers={markers}
                         polylines={polylines}
-                        rects={rects}
                         areas={polygonsFromAreas(areas)}
+                        initialFocus={eventCenter.state.data}
                         accessibilityLabel={mapAccessibilityLabel}
                         fitPadding={12}
                       />
-                    )}
+                    ) : null}
                   </View>
                   <Text variant="caption">
                     O mapa é desenhado a partir dos caminhos que você percorre no local. Toque em um

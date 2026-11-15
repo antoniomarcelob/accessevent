@@ -155,6 +155,8 @@ export type MapCanvasContext = {
 export type MapCanvasProps = {
   state: PoiEditorState;
   dispatch: (action: PoiEditorAction) => void;
+  /** Centro inicial do desenho, correspondente ao endereço do evento. */
+  initialCenter?: Coordinate;
   /**
    * O tamanho do canvas — `h-72` como as outras telas, `w-full`. O conteúdo
    * absoluto (SVG, marcadores, alças) assume `position: relative` no contêiner.
@@ -203,12 +205,12 @@ export type MapCanvasHandle = {
  * movimento dele vira `pan`. Sem medir a janela, no mesmo desenho dos filhos.
  */
 export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function MapCanvas(
-  { state, dispatch, className, accessibilityLabel, context, testID },
+  { state, dispatch, className, accessibilityLabel, context, initialCenter, testID },
   ref,
 ) {
   const [size, setSize] = useState<ViewportSize>({ width: 0, height: 0 });
   const [viewport, setViewport] = useState<MapViewport>({
-    center: [...INITIAL_CENTER],
+    center: [...(initialCenter ?? INITIAL_CENTER)],
     latitudeDelta: INITIAL_LATITUDE_DELTA,
     longitudeDelta: INITIAL_LATITUDE_DELTA,
   });
@@ -278,17 +280,19 @@ export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function Ma
     setViewport(nextViewport);
   };
 
-  // Enquadra a primeira coisa que dá enquadramento: o contexto da navegação
-  // (caminhos/pontos já mapeados) quando ele chega, ou o primeiro cômodo quando o
-  // desenho começa antes do contexto. Sem isso quem abre uma navegação já mapeada
-  // veria o ponto inicial do pavilhão em vez do que existe. Depois da primeira
+  // Sem endereço inicial, enquadra o contexto já mapeado ou o primeiro cômodo.
+  // Com endereço inicial, preserva esse centro na abertura. Depois da primeira
   // vez, quem enquadra é o botão Centralizar — um contexto recarregado no foco não
   // tira a câmera da mão de quem está desenhando.
   const hasFitted = useRef(false);
   useEffect(() => {
     if (hasFitted.current) return;
+    if (initialCenter && size.width > 0 && size.height > 0) {
+      hasFitted.current = true;
+      return;
+    }
     if (fitToAreas()) hasFitted.current = true;
-  }, [context, size, state.areas.length, fitToAreas]);
+  }, [context, initialCenter, size, state.areas.length, fitToAreas]);
 
   const handleTap = (local: ScreenPoint, frame: ViewportSize, vp: MapViewport) => {
     const st = stateRef.current;
@@ -312,9 +316,9 @@ export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function Ma
     if (!coord) return;
 
     // Um tipo armado tem prioridade sobre os marcadores existentes: tocar em uma
-    // área com um tipo selecionado coloca ou troca o item nesse local.
+    // área ou no mapa com um tipo selecionado coloca ou troca o item nesse local.
     if (st.armedPoiKind) {
-      dispatch({ type: 'place-poi', position: coord });
+      dispatch({ type: 'place-poi', position: coord, allowOutsideAreas: true });
       return;
     }
 
@@ -405,6 +409,23 @@ export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function Ma
       return;
     }
 
+    const area = selectedArea(st);
+    if (area && st.activeTool === 'none' && !st.armedPoiKind) {
+      for (let i = 0; i < area.geometry.length; i += 1) {
+        const vertex = mapToScreen(area.geometry[i], vp, frame);
+        if (!vertex) continue;
+        if (pointDistance(startLocal, vertex) <= VERTEX_TOLERANCE_PX) {
+          const gesture = gestureRef.current;
+          gesture.kind = 'edit-vertex';
+          gesture.areaId = area.id;
+          gesture.geometry = area.geometry;
+          gesture.vertexIndex = i;
+          dispatch({ type: 'set-interaction', interaction: 'edit-area' });
+          return;
+        }
+      }
+    }
+
     const selected = selectedPoi(st);
     if (selected) {
       const center = mapToScreen(selected.position, vp, frame);
@@ -435,11 +456,11 @@ export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function Ma
         projected &&
         pointDistance(startLocal, projected) <= POI_TOLERANCE_PX * (poi.markerScale ?? 1)
       ) {
-        const area = st.areas.find((candidate) => candidate.id === poi.areaId) ?? null;
+        const poiArea = st.areas.find((candidate) => candidate.id === poi.areaId) ?? null;
         const gesture = gestureRef.current;
         gesture.kind = 'move-poi';
         gesture.poiId = poi.id;
-        gesture.areaBounds = area ? boundsOfRing(area.geometry) : null;
+        gesture.areaBounds = poiArea ? boundsOfRing(poiArea.geometry) : null;
         dispatch({ type: 'select-poi', poiId: poi.id });
         dispatch({ type: 'set-interaction', interaction: 'move-poi' });
         return;
@@ -450,22 +471,7 @@ export const MapCanvas = forwardRef<MapCanvasHandle, MapCanvasProps>(function Ma
     // sob o dedo acima continua podendo ser reposicionado diretamente.
     if (st.armedPoiKind) return;
 
-    const area = selectedArea(st);
     if (area && st.activeTool === 'none') {
-      for (let i = 0; i < area.geometry.length; i += 1) {
-        const vertex = mapToScreen(area.geometry[i], vp, frame);
-        if (!vertex) continue;
-        if (pointDistance(startLocal, vertex) <= VERTEX_TOLERANCE_PX) {
-          const gesture = gestureRef.current;
-          gesture.kind = 'edit-vertex';
-          gesture.areaId = area.id;
-          gesture.geometry = area.geometry;
-          gesture.vertexIndex = i;
-          dispatch({ type: 'set-interaction', interaction: 'edit-area' });
-          return;
-        }
-      }
-
       const coord = screenToMap(startLocal, vp, frame);
       if (coord && pointInRing(coord, area.geometry)) {
         const gesture = gestureRef.current;
@@ -1032,6 +1038,7 @@ function drawingBounds(context: MapCanvasContext | undefined, state: PoiEditorSt
     ...(context?.paths ?? []),
     ...(context?.rects.map((rect) => rectCorners(rect)) ?? []),
     ...(context?.pois.map((poi) => [poi.position]) ?? []),
+    ...state.pois.map((poi) => [poi.position]),
     ...state.areas.map((area) => area.geometry),
   ];
   const bounds = rings.map(boundsOfRing).filter((b): b is CoordinateBounds => b !== null);
