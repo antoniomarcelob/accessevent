@@ -52,9 +52,13 @@ export default function OrganizerLayout() {
       <Stack.Screen
         name="event/[eventId]/map/[mapId]/record"
         options={{
-          title: 'Mapear novo caminho',
+          title: 'Gravar caminho com GPS',
           gestureEnabled: false,
         }}
+      />
+      <Stack.Screen
+        name="event/[eventId]/map/[mapId]/manual"
+        options={{ title: 'Desenhar caminho manualmente', gestureEnabled: false }}
       />
       <Stack.Screen
         name="event/[eventId]/map/[mapId]/edit"

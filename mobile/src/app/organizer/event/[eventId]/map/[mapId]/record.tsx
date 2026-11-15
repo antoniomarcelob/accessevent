@@ -95,7 +95,7 @@ export default function RecordPathScreen() {
   return (
     <>
       <Stack.Screen
-        options={{ ...mapGestures.screenOptions, title: 'Mapear novo caminho' }}
+        options={{ ...mapGestures.screenOptions, title: 'Gravar caminho com GPS' }}
       />
 
       <Screen contentClassName="flex-1 gap-4 px-5 py-5" testID="record-path-screen">

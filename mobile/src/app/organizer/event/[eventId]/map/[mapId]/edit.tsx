@@ -68,7 +68,7 @@ export default function EditNavigationMapScreen() {
                     />
 
                     <Button
-                      label="Mapear novo caminho"
+                      label="Gravar caminho com GPS"
                       iconStart={<Icon name="map-marker-path" size={20} color={colors.white} />}
                       onPress={() =>
                         router.push({
@@ -78,6 +78,20 @@ export default function EditNavigationMapScreen() {
                       }
                       fullWidth
                       testID="record-path"
+                    />
+
+                    <Button
+                      label="Desenhar caminho manualmente"
+                      variant="outline"
+                      iconStart={<Icon name="vector-polyline" size={20} color={colors.content} />}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/organizer/event/[eventId]/map/[mapId]/manual',
+                          params: { eventId, mapId: id },
+                        })
+                      }
+                      fullWidth
+                      testID="create-path-manually"
                     />
 
                     <Button

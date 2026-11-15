@@ -244,6 +244,8 @@ export type EventMapProps = {
    * duplicar `regionForCoordinate` fora daqui.
    */
   initialFocus?: Coordinate | null;
+  /** Reenquadra o mapa quando o conteúdo muda. Padrão: `true`. */
+  autoFitContent?: boolean;
   /** Nome do mapa para o leitor de tela; o mapa é um gráfico, não um texto. */
   accessibilityLabel?: string;
   /**
@@ -307,8 +309,9 @@ function UnavailableMap({ className, testID }: Pick<EventMapProps, 'className' |
  *
  * Enquadramento: o mapa abre no foco inicial informado pela tela, se houver;
  * sem foco, mostra todo o conteúdo. Depois reenquadra quando o conjunto muda,
- * nunca a cada render. O `initialRegion` explícito também é semeado pela tela
- * quando o conteúdo ainda não localiza o mapa.
+ * nunca a cada render. A tela pode desligar esse reenquadramento para preservar
+ * o enquadramento enquanto desenha. O `initialRegion` explícito também é semeado
+ * pela tela quando o conteúdo ainda não localiza o mapa.
  *
  * **Quem dirige a câmera.** São dois jeitos e eles não convivem. Por padrão o
  * componente reenquadra o conteúdo, o que serve para um mapa salvo. Durante a
@@ -336,6 +339,7 @@ const DrawnMap = forwardRef<EventMapHandle, EventMapProps>(function DrawnMap(
     cameraToFollow = null,
     onCameraSettled,
     initialFocus = null,
+    autoFitContent = true,
     accessibilityLabel = 'Mapa do evento',
     fitPadding = DEFAULT_FIT_PADDING,
     className,
@@ -567,6 +571,7 @@ const DrawnMap = forwardRef<EventMapHandle, EventMapProps>(function DrawnMap(
       initialFocusApplied.current = true;
       return;
     }
+    if (!autoFitContent) return;
 
     const { width, height } = size.current;
     const aspect = width / height;
@@ -666,6 +671,7 @@ const DrawnMap = forwardRef<EventMapHandle, EventMapProps>(function DrawnMap(
     contentKey,
     fitPadding,
     hasLayout,
+    autoFitContent,
     initialFocusLatitude,
     initialFocusLongitude,
     isReady,
