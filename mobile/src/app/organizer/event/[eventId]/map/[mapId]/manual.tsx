@@ -15,12 +15,17 @@ import type { MapGeometry, MapMarker, MapPolyline } from '@/types/map';
 import { toErrorMessage } from '@/utils/errors';
 import { formatDistance } from '@/utils/format';
 import { geometryLengthInMeters } from '@/utils/geo';
+import { markersFromPois, polylinesFromPaths, rectsFromPois } from '@/utils/mapContent';
 
 /** Desenho manual de um caminho: cada toque no mapa acrescenta um vértice. */
 export default function DrawManualPathScreen() {
   const { eventId, mapId } = useLocalSearchParams<{ eventId: string; mapId: string }>();
   const id = mapId ?? '';
   const eventCenter = useAsyncData(() => resolveEventMapCenter(eventId ?? ''), eventId ?? '');
+  const savedContent = useAsyncData(async () => {
+    const [paths, pois] = await Promise.all([repository.listPaths(id), repository.listPois(id)]);
+    return { paths, pois };
+  }, id);
   const mapGestures = useMapGestureNavigation();
   const [geometry, setGeometry] = useState<MapGeometry>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -50,6 +55,19 @@ export default function DrawManualPathScreen() {
     () => (geometry.length >= 2 ? [{ id: 'manual-path', geometry, tone: 'default' }] : []),
     [geometry],
   );
+  const savedPaths = useMemo(
+    () =>
+      savedContent.state.status === 'success'
+        ? polylinesFromPaths(savedContent.state.data.paths)
+        : [],
+    [savedContent.state],
+  );
+  const savedPois = useMemo(
+    () => (savedContent.state.status === 'success' ? savedContent.state.data.pois : []),
+    [savedContent.state],
+  );
+  const savedMarkers = useMemo(() => markersFromPois(savedPois), [savedPois]);
+  const savedRects = useMemo(() => rectsFromPois(savedPois), [savedPois]);
 
   const addPoint = useCallback(
     (coordinate: Coordinate) => {
@@ -110,15 +128,36 @@ export default function DrawManualPathScreen() {
           </View>
         ) : (
           <>
+            {savedContent.state.status === 'error' ? (
+              <Alert
+                tone="warning"
+                title="Não foi possível carregar o que já está no mapa"
+                description={savedContent.state.message}
+                action={
+                  <Button
+                    label="Tentar novamente"
+                    variant="outline"
+                    onPress={() => savedContent.reload()}
+                  />
+                }
+              />
+            ) : null}
+
             <View className="min-h-56 flex-1" {...mapGestures.touchHandlers}>
+              {savedContent.state.status === 'loading' ? (
+                <Text variant="caption" tint="muted">
+                  Carregando os caminhos e pontos de interesse já cadastrados…
+                </Text>
+              ) : null}
               <EventMap
                 className="h-full rounded-lg border border-border"
-                markers={markers}
-                polylines={polylines}
+                markers={[...savedMarkers, ...markers]}
+                polylines={[...savedPaths, ...polylines]}
+                rects={savedRects}
                 onMapPress={addPoint}
                 initialFocus={eventCenter.state.data}
                 autoFitContent={false}
-                accessibilityLabel={`Mapa para desenhar o caminho. ${geometry.length} pontos adicionados.`}
+                accessibilityLabel={`Mapa compartilhado para desenhar o caminho. ${savedPaths.length} caminhos e ${savedMarkers.length} pontos de interesse já cadastrados. ${geometry.length} pontos adicionados ao novo caminho.`}
                 testID="manual-path-map"
               />
             </View>
@@ -127,8 +166,9 @@ export default function DrawManualPathScreen() {
               <View className="gap-2">
                 <Text variant="label">Toque no mapa para desenhar</Text>
                 <Text variant="caption">
-                  Cada toque adiciona um ponto ao trajeto. Navegue pelo mapa sem usar a localização
-                  do aparelho.
+                  Os caminhos e pontos de interesse já cadastrados também aparecem aqui. Cada toque
+                  adiciona um ponto ao trajeto. Navegue pelo mapa sem usar a localização do
+                  aparelho.
                 </Text>
                 <Text
                   variant="caption"

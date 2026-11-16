@@ -16,6 +16,7 @@ import type { MapPolyline } from '@/types/map';
 import { toErrorMessage } from '@/utils/errors';
 import { formatDistance, formatDuration } from '@/utils/format';
 import { GPS_SIGNAL_LABELS } from '@/utils/recording';
+import { markersFromPois, polylinesFromPaths, rectsFromPois } from '@/utils/mapContent';
 
 /** Um trajeto com menos de dois pontos não tem trecho para desenhar. */
 const MINIMUM_POINTS = 2;
@@ -36,10 +37,14 @@ const MINIMUM_POINTS = 2;
  */
 export default function RecordPathScreen() {
   const { eventId, mapId } = useLocalSearchParams<{ eventId: string; mapId: string }>();
-  const eventCenter = useAsyncData(
-    () => resolveEventMapCenter(eventId ?? ''),
-    eventId ?? '',
-  );
+  const eventCenter = useAsyncData(() => resolveEventMapCenter(eventId ?? ''), eventId ?? '');
+  const savedContent = useAsyncData(async () => {
+    const [paths, pois] = await Promise.all([
+      repository.listPaths(mapId ?? ''),
+      repository.listPois(mapId ?? ''),
+    ]);
+    return { paths, pois };
+  }, mapId ?? '');
   const mapGestures = useMapGestureNavigation();
   const recording = usePathRecording();
   const { status, geometry, distanceMeters, elapsedMs, discardedCount, signal, accuracy } =
@@ -53,6 +58,20 @@ export default function RecordPathScreen() {
     () => (geometry.length > 0 ? [{ id: 'recorded-path', geometry, tone: 'default' }] : []),
     [geometry],
   );
+  const savedPaths = useMemo(
+    () =>
+      savedContent.state.status === 'success'
+        ? polylinesFromPaths(savedContent.state.data.paths)
+        : [],
+    [savedContent.state],
+  );
+  const savedPois = useMemo(
+    () => (savedContent.state.status === 'success' ? savedContent.state.data.pois : []),
+    [savedContent.state],
+  );
+  const markers = useMemo(() => markersFromPois(savedPois), [savedPois]);
+  const rects = useMemo(() => rectsFromPois(savedPois), [savedPois]);
+  const mapPolylines = useMemo(() => [...savedPaths, ...polylines], [savedPaths, polylines]);
 
   /**
    * Posição de quem grava, no formato de coordenada gravada.
@@ -94,9 +113,7 @@ export default function RecordPathScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{ ...mapGestures.screenOptions, title: 'Gravar caminho com GPS' }}
-      />
+      <Stack.Screen options={{ ...mapGestures.screenOptions, title: 'Gravar caminho com GPS' }} />
 
       <Screen contentClassName="flex-1 gap-4 px-5 py-5" testID="record-path-screen">
         {eventCenter.state.status === 'loading' ? (
@@ -121,15 +138,36 @@ export default function RecordPathScreen() {
           </View>
         ) : position ? (
           <View className="flex-1" {...mapGestures.touchHandlers}>
+            {savedContent.state.status === 'loading' ? (
+              <Text variant="caption" tint="muted">
+                Carregando os caminhos e pontos de interesse já cadastrados…
+              </Text>
+            ) : null}
+            {savedContent.state.status === 'error' ? (
+              <Alert
+                tone="warning"
+                title="Não foi possível carregar o que já está no mapa"
+                description={savedContent.state.message}
+                action={
+                  <Button
+                    label="Tentar novamente"
+                    variant="outline"
+                    onPress={() => savedContent.reload()}
+                  />
+                }
+              />
+            ) : null}
             <EventMap
               className="flex-1 rounded-lg border border-border"
-              polylines={polylines}
+              polylines={mapPolylines}
+              markers={markers}
+              rects={rects}
               userLocation={recording.currentPosition}
               followUserLocation={isRecording}
               initialFocus={eventCenter.state.data}
               cameraToFollow={cameraCenter ?? position}
               onCameraSettled={setCameraCenter}
-              accessibilityLabel="Mapa com o caminho em gravação"
+              accessibilityLabel={`Mapa compartilhado com o caminho em gravação, ${savedPaths.length} caminhos e ${markers.length} pontos de interesse já cadastrados`}
             />
           </View>
         ) : (
@@ -171,7 +209,8 @@ export default function RecordPathScreen() {
                   <Text variant="label">Como funciona</Text>
                   <Text variant="caption">
                     O app pede a permissão de localização, você percorre o caminho e o GPS registra
-                    o trajeto no mapa. Mantenha o app aberto na frente enquanto grava.
+                    o trajeto no mapa. Os caminhos e pontos de interesse já cadastrados também
+                    aparecem durante a gravação. Mantenha o app aberto na frente enquanto grava.
                   </Text>
                 </View>
               </Card>
